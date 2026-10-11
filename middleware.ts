@@ -1,7 +1,7 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const OPEN = ["/login", "/auth", "/no-access"];
+const OPEN = ["/login", "/auth", "/no-access", "/api/cron"];
 
 export async function middleware(req: NextRequest) {
   let res = NextResponse.next({ request: req });

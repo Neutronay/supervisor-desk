@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { getNavCounts, getViewer } from "@/lib/data";
 import { signOut } from "@/app/actions";
 import { Nav, type NavItem } from "@/components/nav";
+import { ROLE_LABEL, isManager } from "@/lib/domain";
 import { Toast } from "@/components/toast";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -12,7 +13,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     { href: "/assign", label: "Supervisors", count: c.assign },
     { href: "/documents", label: "Documents", count: c.documents },
     { href: "/logs", label: "Logs", count: c.logs },
-    ...(viewer.role === "coordinator" ? [{ href: "/people", label: "People" }] : [])
+    ...(isManager(viewer.role) ? [{ href: "/people", label: "People" }, { href: "/audit", label: "Audit trail" }] : []),
+    ...(viewer.role === "admin" ? [{ href: "/departments", label: "Departments" }] : []),
+    { href: "/settings", label: "Settings" }
   ];
   return (
     <div className="grid min-h-screen md:grid-cols-[220px_minmax(0,1fr)]">
@@ -23,7 +26,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </div>
         <Nav items={items} />
         <div className="flex items-center justify-between gap-2 text-xs text-soft md:mt-auto md:flex-col md:items-start">
-          <span><b className="text-fg">{viewer.full_name}</b><br />{viewer.role === "coordinator" ? "Programme coordinator" : viewer.role === "supervisor" ? "Supervisor" : "Student"}</span>
+          <span><b className="text-fg">{viewer.full_name}</b><br />{ROLE_LABEL[viewer.role]}</span>
           <form action={signOut}><button className="btn btn-sm">Sign out</button></form>
         </div>
       </aside>

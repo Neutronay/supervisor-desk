@@ -1,7 +1,8 @@
-import { getLogs, getStudents, getSupervisors, getViewer } from "@/lib/data";
-import { MS_LABEL, currentMs, fmtDate, health, isOverdue, msName, progressOf, today, type Student, type Viewer } from "@/lib/domain";
+import { getLastMeetings, getStats, getStudent, getStudentsPage, getSupervisors, getViewer, pageNum } from "@/lib/data";
+import { MS_LABEL, currentMs, fmtDate, health, isManager, isOverdue, msName, progressOf, today, type Student, type Viewer } from "@/lib/domain";
 import { milestoneAction } from "@/app/actions";
 import { Bar, Empty, Pill, Stat, Track } from "@/components/ui";
+import { Pager } from "@/components/pager";
 
 export const metadata = { title: "Milestones" };
 
@@ -30,47 +31,58 @@ function Actions({ s, viewer }: { s: Student; viewer: Viewer }) {
   );
 }
 
-export default async function Dashboard({ searchParams }: { searchParams: Promise<{ student?: string }> }) {
-  const { student: open } = await searchParams;
-  const [viewer, students, sups, logs] = await Promise.all([getViewer(), getStudents(), getSupervisors(), getLogs()]);
+export default async function Dashboard({ searchParams }: { searchParams: Promise<{ student?: string; q?: string; page?: string }> }) {
+  const sp = await searchParams;
+  const page = pageNum(sp.page);
+  const [viewer, { rows, total }, sups, stats] = await Promise.all([getViewer(), getStudentsPage(page, sp.q), getSupervisors(), getStats()]);
+  const open = sp.student;
+  // A student opened from a link (e.g. an email) may be on another page of the list.
+  const extra = open && !rows.some((r) => r.id === open) ? await getStudent(open) : null;
+  const students = extra ? [extra, ...rows] : rows;
+  const lastMeet = await getLastMeetings(students.map((x) => x.id));
   const supName = (id: string | null) => sups.find((x) => x.id === id)?.full_name ?? "No supervisor yet";
-  const lastMeet = (id: string) => logs.find((l) => l.student_id === id)?.met_on ?? null; // logs are newest first
   const t = today();
-  const overdue = students.reduce((n, s) => n + s.ms.filter((m) => isOverdue(m, t)).length, 0);
-  const awaiting = students.reduce((n, s) => n + s.ms.filter((m) => m.status === "submitted").length, 0);
 
   return (
     <>
       <header>
         <h1 className="text-[26px] font-bold">Milestone tracker</h1>
-        <p className="text-soft">Progress, deadlines and approvals for {viewer.role === "coordinator" ? "all students in the programme" : viewer.role === "supervisor" ? "students you supervise" : "your own project"}.</p>
+        <p className="text-soft">Progress, deadlines and approvals for {viewer.role === "student" ? "your own project" : viewer.role === "supervisor" ? "students you supervise" : "everyone in scope"}.</p>
       </header>
 
       {viewer.role !== "student" && (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <Stat label="Students" value={students.length} />
-          <Stat label="Overdue milestones" value={overdue} tone={overdue ? "bad" : "good"} />
-          <Stat label="Awaiting approval" value={awaiting} tone={awaiting ? "info" : undefined} />
-          <Stat label="Without supervisor" value={students.filter((s) => !s.supervisor_id).length} tone="warn" />
+          <Stat label="Students" value={stats.students} />
+          <Stat label="Overdue milestones" value={stats.overdue} tone={stats.overdue ? "bad" : "good"} />
+          <Stat label="Awaiting approval" value={stats.awaiting} tone={stats.awaiting ? "info" : undefined} />
+          <Stat label="Without supervisor" value={stats.unassigned} tone="warn" />
         </div>
       )}
 
-      {!students.length && <div className="panel"><Empty>No students to show yet.</Empty></div>}
+      {viewer.role !== "student" && stats.students > PAGE_HINT && (
+        <form className="flex max-w-md gap-2" role="search">
+          <input name="q" defaultValue={sp.q} placeholder="Search by name or matric number" aria-label="Search students" className="input" />
+          <button className="btn btn-sm">Search</button>
+        </form>
+      )}
+
+      {!students.length && <div className="panel"><Empty>{sp.q ? "No students match that search." : "No students to show yet."}</Empty></div>}
       {students.map((s) => {
-        const h = health(s, lastMeet(s.id), t);
+        const h = health(s, lastMeet.get(s.id) ?? null, t);
         const isOpen = open === s.id || (viewer.role === "student" && students.length === 1);
+        const keep = (id?: string) => { const x = new URLSearchParams(); if (sp.q) x.set("q", sp.q); if (page > 1) x.set("page", String(page)); if (id) x.set("student", id); const qs = x.toString(); return qs ? `/dashboard?${qs}` : "/dashboard"; };
         return (
           <article key={s.id} className="panel grid gap-3">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
                 <h3 className="text-base font-semibold">{s.full_name} <span className="font-mono text-xs text-soft">{s.programme} · {s.matric}</span></h3>
                 <p className="mt-0.5">{s.title}</p>
-                <p className="hint">Supervisor: {supName(s.supervisor_id)}</p>
+                <p className="hint">Supervisor: {supName(s.supervisor_id)}{viewer.role === "admin" && s.department_name ? ` · ${s.department_name}` : ""}</p>
               </div>
               <div className="flex items-center gap-2"><span className="chip">{s.area}</span><Pill tone={h.tone}>{h.label}</Pill></div>
             </div>
             <div className="flex items-center gap-3"><div className="flex-1"><Bar pct={progressOf(s)} /></div><span className="font-mono text-xs">{progressOf(s)}%</span></div>
-            <Track s={s} href={isOpen && open === s.id ? "/dashboard" : `/dashboard?student=${s.id}`} />
+            <Track s={s} href={open === s.id ? keep() : keep(s.id)} />
             {isOpen && (
               <div className="grid gap-3 border-t border-line pt-3">
                 <div className="overflow-x-auto">
@@ -94,6 +106,8 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           </article>
         );
       })}
+      <Pager page={page} total={total} path="/dashboard" params={{ q: sp.q }} />
     </>
   );
 }
+const PAGE_HINT = 8; // show the search box once the list is long enough to need it

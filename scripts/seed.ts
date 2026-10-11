@@ -5,7 +5,7 @@
  */
 import { createClient } from "@supabase/supabase-js";
 
-const PASSWORD = "SupervisionDemo1!";
+import { clearDemoNotifications, seedExtra, PASSWORD } from "./extra";
 const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } });
 
 const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Lagos" });
@@ -22,6 +22,9 @@ async function user(email: string, meta: Record<string, unknown>) {
 }
 
 async function main() {
+  const depts = must(await sb.from("departments").select("id").order("created_at"), "departments");
+  if (!depts?.length) throw new Error("Run the migrations first.");
+  const department_id = depts[0].id;
   // supervisors: key, name, areas, capacity
   const SUPS: [string, string, string[], number][] = [
     ["s1", "Prof. Adaeze Okonkwo", ["Educational Technology", "Science Education"], 5],
@@ -46,10 +49,10 @@ async function main() {
   const slug = (n: string) => n.toLowerCase().replace(/^(prof\.|dr\.)\s*/, "").replace(/[^a-z]+/g, ".");
   const id: Record<string, string> = {};
 
-  id.coord = await user("coordinator@supdesk.demo", { role: "coordinator", full_name: "Programme coordinator" });
-  for (const [k, name, areas, capacity] of SUPS) id[k] = await user(`${slug(name)}@supdesk.demo`, { role: "supervisor", full_name: name, areas, capacity });
+  id.coord = await user("coordinator@supdesk.demo", { role: "coordinator", full_name: "Programme coordinator", department_id });
+  for (const [k, name, areas, capacity] of SUPS) id[k] = await user(`${slug(name)}@supdesk.demo`, { role: "supervisor", full_name: name, areas, capacity, department_id });
   for (const [k, name, matric, programme, title, area, , , , ago] of STUDENTS)
-    id[k] = await user(`${slug(name)}@supdesk.demo`, { role: "student", full_name: name, matric, programme, title, area, started_on: addDays(today, -ago) });
+    id[k] = await user(`${slug(name)}@supdesk.demo`, { role: "student", full_name: name, department_id, matric, programme, title, area, started_on: addDays(today, -ago) });
 
   for (const [k, , , programme, , , sup, done, cur, ago] of STUDENTS) {
     const gap = programme === "PhD" ? 70 : 45, start = addDays(today, -ago);
@@ -95,6 +98,9 @@ async function main() {
   ];
   for (const [st, sp, ago, mode, minutes, summary, actions, next, ack] of LOGS)
     must(await sb.from("supervision_logs").insert({ student_id: id[st], supervisor_id: id[sp], met_on: addDays(today, -ago), mode, minutes, summary, actions, next_meeting: next == null ? null : addDays(today, next), acknowledged: ack }), "log");
+
+  const extra = await seedExtra(sb);
+  await clearDemoNotifications(sb, [...Object.values(id), ...extra]);
 
   console.log(`Seeded. Sign in as coordinator@supdesk.demo / ${PASSWORD}`);
   console.log(`Other demo logins: ${slug(SUPS[0][1])}@supdesk.demo (supervisor), ${slug(STUDENTS[0][1])}@supdesk.demo (student), same password.`);

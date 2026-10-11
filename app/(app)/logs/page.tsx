@@ -1,18 +1,21 @@
 import Link from "next/link";
-import { getLogs, getStudents, getSupervisors, getViewer } from "@/lib/data";
+import { getLogsPage, getStudentOptions, getSupervisors, getViewer, pageNum } from "@/lib/data";
 import { LOG_MODES, fmtDate, today } from "@/lib/domain";
 import { ackLog, addLog } from "@/app/actions";
 import { Empty, Pill } from "@/components/ui";
+import { Pager } from "@/components/pager";
 
 export const metadata = { title: "Logs" };
 
-export default async function Logs({ searchParams }: { searchParams: Promise<{ student?: string; new?: string }> }) {
-  const { student = "all", new: showForm } = await searchParams;
-  const [viewer, logs, students, sups] = await Promise.all([getViewer(), getLogs(), getStudents(), getSupervisors()]);
+export default async function Logs({ searchParams }: { searchParams: Promise<{ student?: string; new?: string; page?: string }> }) {
+  const sp = await searchParams;
+  const student = sp.student ?? "all";
+  const showForm = sp.new;
+  const page = pageNum(sp.page);
+  const [viewer, { rows: shown, total }, students, sups] = await Promise.all([getViewer(), getLogsPage(page, student), getStudentOptions(), getSupervisors()]);
   const sname = (id: string) => students.find((s) => s.id === id)?.full_name ?? "Unknown";
-  const pname = (id: string) => sups.find((s) => s.id === id)?.full_name ?? "Unknown";
-  const shown = logs.filter((l) => student === "all" || l.student_id === student);
-  const mine = students.filter((s) => s.supervisor_id === viewer.id);
+  const pname = (id: string) => sups.find((s) => s.id === id)?.full_name ?? "their supervisor";
+  const mine = students; // a supervisor only ever sees their own students
 
   return (
     <>
@@ -69,6 +72,7 @@ export default async function Logs({ searchParams }: { searchParams: Promise<{ s
           </article>
         ))}
       </section>
+      <Pager page={page} total={total} path="/logs" params={{ student: student === "all" ? undefined : student }} size={15} />
     </>
   );
 }

@@ -1,14 +1,17 @@
-import { getStudents, getSupervisors, getViewer } from "@/lib/data";
-import { suggestFor } from "@/lib/domain";
+import { getAssignData, getSupervisors, getViewer, pageNum } from "@/lib/data";
+import { isManager, suggestFor } from "@/lib/domain";
 import { assignSupervisor } from "@/app/actions";
 import { Bar, Empty, Pill } from "@/components/ui";
+import { Pager } from "@/components/pager";
 
 export const metadata = { title: "Supervisors" };
 
-export default async function Assign() {
-  const [viewer, students, sups] = await Promise.all([getViewer(), getStudents(), getSupervisors()]);
-  const edit = viewer.role === "coordinator";
-  const un = students.filter((s) => !s.supervisor_id);
+export default async function Assign({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
+  const page = pageNum((await searchParams).page);
+  const [viewer, data, sups] = await Promise.all([getViewer(), getAssignData(page), getSupervisors()]);
+  const edit = isManager(viewer.role);
+  const un = data.unassigned;
+  const students = data.assigned;
 
   return (
     <>
@@ -20,7 +23,7 @@ export default async function Assign() {
       <div className="grid gap-5 lg:grid-cols-2">
         {edit && (
           <section className="panel">
-            <div className="mb-3 flex items-center justify-between"><h2 className="text-[17px]">Awaiting a supervisor</h2><Pill tone={un.length ? "warn" : "good"}>{un.length}</Pill></div>
+            <div className="mb-3 flex items-center justify-between"><h2 className="text-[17px]">Awaiting a supervisor</h2><Pill tone={data.unassignedTotal ? "warn" : "good"}>{data.unassignedTotal}</Pill></div>
             {!un.length && <Empty>Every student has a supervisor.</Empty>}
             {un.map((s) => (
               <div key={s.id} className="grid gap-1.5 border-b border-line py-3 last:border-0">
@@ -37,6 +40,7 @@ export default async function Assign() {
                 ))}
               </div>
             ))}
+            <div className="mt-3"><Pager page={page} total={data.unassignedTotal} path="/assign" /></div>
           </section>
         )}
         <section className={`panel ${edit ? "" : "lg:col-span-2"}`}>

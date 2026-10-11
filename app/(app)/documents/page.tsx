@@ -1,18 +1,22 @@
 import Link from "next/link";
-import { getDocs, getStudents, getViewer } from "@/lib/data";
+import { getDocsPage, getMyDocs, getStudentOptions, getViewer, pageNum } from "@/lib/data";
 import { DOC_LABEL, DOC_TONE, fmtDate, msName, type DocStatus } from "@/lib/domain";
 import { Empty, Pill } from "@/components/ui";
 import { UploadForm } from "@/components/upload-form";
+import { Pager } from "@/components/pager";
 
 export const metadata = { title: "Documents" };
 const FILTERS: (DocStatus | "all")[] = ["all", "submitted", "in_review", "revision", "approved"];
 
-export default async function Documents({ searchParams }: { searchParams: Promise<{ f?: string }> }) {
-  const { f = "all" } = await searchParams;
-  const [viewer, docs, students] = await Promise.all([getViewer(), getDocs(), getStudents()]);
+export default async function Documents({ searchParams }: { searchParams: Promise<{ f?: string; page?: string }> }) {
+  const sp = await searchParams;
+  const f = sp.f ?? "all";
+  const page = pageNum(sp.page);
+  const viewer = await getViewer();
+  const [{ rows: shown, total }, students, mine] = await Promise.all([
+    getDocsPage(page, f), getStudentOptions(), viewer.role === "student" ? getMyDocs(viewer.id) : Promise.resolve([])
+  ]);
   const name = (id: string) => students.find((s) => s.id === id)?.full_name ?? "Unknown";
-  const shown = docs.filter((d) => f === "all" || d.status === f);
-  const mine = docs.filter((d) => d.student_id === viewer.id);
 
   return (
     <>
@@ -20,7 +24,7 @@ export default async function Documents({ searchParams }: { searchParams: Promis
         <h1 className="text-[26px] font-bold">Documents and review</h1>
         <p className="text-soft">{viewer.role === "student" ? "Upload chapters and respond to supervisor feedback." : "Review submissions, comment and record a decision."}</p>
       </header>
-      {viewer.role === "student" && <UploadForm studentId={viewer.id} docs={mine.map((d) => ({ id: d.id, title: d.title, status: d.status, milestone_id: d.milestone_id }))} />}
+      {viewer.role === "student" && <UploadForm studentId={viewer.id} docs={mine} />}
       <div className="flex flex-wrap gap-2" role="tablist" aria-label="Filter by status">
         {FILTERS.map((k) => (
           <Link key={k} href={k === "all" ? "/documents" : `/documents?f=${k}`} aria-current={f === k ? "page" : undefined}
@@ -38,6 +42,7 @@ export default async function Documents({ searchParams }: { searchParams: Promis
           </Link>
         ))}
       </section>
+      <Pager page={page} total={total} path="/documents" params={{ f: f === "all" ? undefined : f }} />
     </>
   );
 }

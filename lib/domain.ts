@@ -1,6 +1,8 @@
 // Pure domain logic, ported from the demo. No I/O in this file.
 
-export type Role = "coordinator" | "supervisor" | "student";
+export type Role = "admin" | "coordinator" | "supervisor" | "student";
+export const isManager = (r: Role) => r === "coordinator" || r === "admin";
+export const ROLE_LABEL: Record<Role, string> = { admin: "Administrator", coordinator: "Programme coordinator", supervisor: "Supervisor", student: "Student" };
 export type MsStatus = "not_started" | "in_progress" | "submitted" | "approved";
 export type DocStatus = "submitted" | "in_review" | "revision" | "approved";
 export type Tone = "good" | "warn" | "bad" | "info";
@@ -9,13 +11,14 @@ export interface Milestone { milestone_id: string; status: MsStatus; due_on: str
 export interface Student {
   id: string; full_name: string; matric: string; programme: string; title: string; area: string;
   supervisor_id: string | null; assigned_on: string | null; ms: Milestone[];
+  department_id?: string | null; department_name?: string | null;
 }
-export interface Supervisor { id: string; full_name: string; areas: string[]; capacity: number; load: number }
+export interface Supervisor { id: string; full_name: string; areas: string[]; capacity: number; load: number; department_id?: string | null }
 export interface Log {
   id: string; student_id: string; supervisor_id: string; met_on: string; mode: string; minutes: number;
   summary: string; actions: string[]; next_meeting: string | null; acknowledged: boolean;
 }
-export interface Viewer { id: string; full_name: string; role: Role }
+export interface Viewer { id: string; full_name: string; role: Role; department_id: string | null }
 
 export const MILESTONES = [
   "Topic approval", "Proposal defence", "Ethics clearance", "Literature review", "Methodology",
@@ -67,6 +70,7 @@ export function health(s: Student, lastMeeting: string | null, t = today()): { k
 /** Best three supervisors for a student: area match first, then free capacity. */
 export function suggestFor(s: Student, sups: Supervisor[]) {
   return sups
+    .filter((sp) => !s.department_id || !sp.department_id || sp.department_id === s.department_id)
     .map((sp) => {
       const free = sp.capacity - sp.load;
       const match = sp.areas.includes(s.area);
@@ -80,3 +84,6 @@ export function suggestFor(s: Student, sups: Supervisor[]) {
     .sort((a, b) => b.score - a.score)
     .slice(0, 3);
 }
+
+export const PAGE_SIZE = 20;
+export const pageCount = (total: number, size = PAGE_SIZE) => Math.max(1, Math.ceil(total / size));

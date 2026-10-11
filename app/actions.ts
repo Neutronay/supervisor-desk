@@ -2,10 +2,10 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { adminClient } from "@/lib/supabase/admin";
-import { ok, fail, safeBack } from "@/lib/flash";
+import { ok, fail, safeBack, sendQueuedEmails } from "@/lib/flash";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { DOC_LABEL, LOG_MODES, type DocStatus } from "@/lib/domain";
+import { DOC_LABEL, LOG_MODES, isManager, type DocStatus } from "@/lib/domain";
 
 const str = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
 
@@ -79,6 +79,7 @@ export async function registerUpload(p: {
   });
   if (error) return { ok: false, error: error.message };
   revalidatePath("/", "layout");
+  sendQueuedEmails();
   return { ok: true };
 }
 
@@ -134,18 +135,26 @@ export async function ackLog(fd: FormData) {
   ok("/logs", "Signed off. Thank you.");
 }
 
-/* ---------- people (coordinator only) ---------- */
-export async function invitePerson(fd: FormData) {
+/* ---------- people ---------- */
+async function whoAmI() {
   const sb = await createClient();
   const { data: { user } } = await sb.auth.getUser();
-  const { data: me } = await sb.from("profiles").select("role").eq("id", user?.id ?? "").maybeSingle();
-  if (me?.role !== "coordinator") fail("/people", "Only the coordinator can invite people.");
+  const { data: me } = await sb.from("profiles").select("role, department_id").eq("id", user?.id ?? "").eq("active", true).maybeSingle();
+  return { sb, me };
+}
 
+export async function invitePerson(fd: FormData) {
+  const { me } = await whoAmI();
+  if (!me || !isManager(me.role)) fail("/people", "Only coordinators and administrators can invite people.");
   const role = str(fd, "role");
   const email = str(fd, "email");
   const full_name = str(fd, "full_name");
   if (!email || !full_name) fail("/people", "Name and email are required.");
-  const meta: Record<string, unknown> = { role, full_name };
+  if ((role === "coordinator" || role === "admin") && me.role !== "admin") fail("/people", "Only an administrator can invite coordinators or administrators.");
+  const department_id = role === "admin" ? "" : me.role === "admin" ? str(fd, "department_id") : (me.department_id ?? "");
+  if (role !== "admin" && !department_id) fail("/people", "Choose a department.");
+
+  const meta: Record<string, unknown> = { role, full_name, department_id };
   if (role === "supervisor") {
     meta.areas = fd.getAll("areas").map(String);
     meta.capacity = Number(str(fd, "capacity")) || 4;
@@ -154,11 +163,68 @@ export async function invitePerson(fd: FormData) {
       if (!str(fd, k)) fail("/people", "Students need a matric number, programme, title and research area.");
       meta[k] = str(fd, k);
     }
-  } else if (role !== "coordinator") fail("/people", "Pick a role.");
+  } else if (role !== "coordinator" && role !== "admin") fail("/people", "Pick a role.");
 
   const { error } = await adminClient().auth.admin.inviteUserByEmail(email, {
     data: meta, redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL ?? ""}/auth/confirm`
   });
   if (error) fail("/people", error.message);
   ok("/people", `Invitation sent to ${email}.`);
+}
+
+export async function updatePerson(fd: FormData) {
+  const id = str(fd, "id");
+  const back = `/people/${id}`;
+  if (!str(fd, "full_name")) fail(back, "Name cannot be empty.");
+  const areas = fd.getAll("areas").map(String);
+  const sb = await createClient();
+  const { error } = await sb.rpc("update_person", {
+    p_id: id, p_name: str(fd, "full_name"), p_matric: str(fd, "matric") || null, p_programme: str(fd, "programme") || null,
+    p_title: str(fd, "title") || null, p_area: str(fd, "area") || null,
+    p_areas: fd.has("is_supervisor") ? areas : null, p_capacity: fd.has("capacity") ? Number(str(fd, "capacity")) : null
+  });
+  if (error) fail(back, error.message);
+  ok(back, "Saved.");
+}
+
+export async function setPersonActive(fd: FormData) {
+  const id = str(fd, "id");
+  const active = str(fd, "active") === "true";
+  const back = `/people/${id}`;
+  const sb = await createClient();
+  const { error } = await sb.rpc("set_person_active", { p_id: id, p_active: active });
+  if (error) fail(back, error.message);
+  // Also block sign-in at the auth layer (the database rule already stops all data access).
+  await adminClient().auth.admin.updateUserById(id, { ban_duration: active ? "none" : "876000h" });
+  ok(back, active ? "Account reactivated." : "Account deactivated. They can no longer sign in.");
+}
+
+export async function movePerson(fd: FormData) {
+  const id = str(fd, "id");
+  const sb = await createClient();
+  const { error } = await sb.rpc("move_person_department", { p_id: id, p_dept: str(fd, "department_id") });
+  if (error) fail(`/people/${id}`, error.message);
+  ok(`/people/${id}`, "Moved to the new department. Any supervisor assignment was cleared.");
+}
+
+/* ---------- departments (administrator) ---------- */
+export async function saveDepartment(fd: FormData) {
+  const name = str(fd, "name");
+  if (!name) fail("/departments", "Give the department a name.");
+  const sb = await createClient();
+  const id = str(fd, "id");
+  const { data, error } = id
+    ? await sb.from("departments").update({ name }).eq("id", id).select("id")
+    : await sb.from("departments").insert({ name }).select("id");
+  if (error) fail("/departments", error.code === "23505" ? "A department with that name already exists." : error.message);
+  if (!data?.length) fail("/departments", "Only an administrator can change departments.");
+  ok("/departments", id ? "Renamed." : "Department created.");
+}
+
+/* ---------- my settings ---------- */
+export async function saveSettings(fd: FormData) {
+  const sb = await createClient();
+  const { error } = await sb.rpc("set_my_notifications", { p_on: fd.get("emails") === "on" });
+  if (error) fail("/settings", error.message);
+  ok("/settings", "Settings saved.");
 }
